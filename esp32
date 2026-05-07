@@ -1,0 +1,42 @@
+#include <WiFi.h>
+#include <esp_now.h>
+
+// Gelen veri paketi (Verici ile BİREBİR aynı olmalı)
+typedef struct struct_message {
+  float sicaklik;
+  float nem;
+} struct_message;
+
+struct_message myData;
+
+// 🚀 İŞTE DEĞİŞEN KISIM BURASI (Yeni ESP32 v3.x uyumlu dinleme kulaklığı)
+void OnDataRecv(const esp_now_recv_info_t * esp_now_info, const uint8_t *incomingData, int len) {
+  memcpy(&myData, incomingData, sizeof(myData));
+  
+  Serial.println("--- 📥 YENI VERI YAKALANDI ---");
+  Serial.print("Gelen Sicaklik: ");
+  Serial.println(myData.sicaklik);
+  Serial.print("Gelen Nem: ");
+  Serial.println(myData.nem);
+  Serial.println("------------------------------");
+}
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.mode(WIFI_STA); // İstasyon modu
+  
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESP-NOW Baslatilamadi!");
+
+    return;
+  }
+  
+  // Telsizi dinlemeye başla
+  esp_now_register_recv_cb(OnDataRecv);
+  
+  Serial.println("Gateway Hazir! Sinyal bekleniyor... 📡");
+}
+
+void loop() {
+  // Gateway sadece dinler, döngüde ekstra işi yok
+}

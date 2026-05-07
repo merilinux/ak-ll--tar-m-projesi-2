@@ -1,0 +1,140 @@
+#include <ESP8266WiFi.h>
+#include <FirebaseESP8266.h>
+#include <DHT.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+
+#define WIFI_SSID "Meriphone"
+#define WIFI_PASSWORD "meri12345"
+#define FIREBASE_HOST "botanix-iot-default-rtdb.europe-west1.firebasedatabase.app"
+#define FIREBASE_AUTH "fVatRmIuJPhmJHUi7Ke9dRJvxKfw7qxbrw1TViz7"
+
+#define DHT_PIN D4
+#define DHT_TYPE DHT11
+const int sensorPin = A0;
+
+LiquidCrystal_I2C lcd(0x27, 16, 2);  // 16 sutun, 2 satir
+DHT dht(DHT_PIN, DHT_TYPE);
+FirebaseData firebaseData;
+FirebaseConfig config;
+FirebaseAuth auth;
+
+void setup() {
+  Serial.begin(115200);
+  delay(2000);
+
+  // LCD baslat
+  Wire.begin(D2, D1);
+  lcd.init();
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print("BotaniX Basliyor");
+  lcd.setCursor(0, 1);
+  lcd.print("Lutfen bekleyin.");
+
+  dht.begin();
+
+  Serial.println("WiFi'a baglaniliyor...");
+  WiFi.disconnect();
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("WiFi baglaniyor");
+
+  int deneme = 0;
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.print(".");
+    delay(500);
+    deneme++;
+    if (deneme > 40) {
+      Serial.println("Yeniden deneniyor...");
+      lcd.setCursor(0, 1);
+      lcd.print("Yeniden deneme..");
+      WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+      deneme = 0;
+    }
+  }
+
+  Serial.println("WiFi baglandi!");
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("WiFi Baglandi!");
+  lcd.setCursor(0, 1);
+  lcd.print(WiFi.localIP());
+  delay(2000);
+
+  firebaseData.setBSSLBufferSize(4096, 1024);
+  config.host = FIREBASE_HOST;
+  config.signer.tokens.legacy_token = FIREBASE_AUTH;
+  Firebase.begin(&config, &auth);
+  Firebase.reconnectWiFi(true);
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Firebase OK!");
+  lcd.setCursor(0, 1);
+  lcd.print("Sistem Hazir!");
+  delay(2000);
+}
+
+void loop() {
+  if (!Firebase.ready()) {
+    Serial.println("Firebase hazir degil...");
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Firebase Hatasi!");
+    delay(2000);
+    return;
+  }
+
+  int ham = analogRead(sensorPin);
+  int toprak = map(ham, 1024, 200, 0, 100);
+  toprak = constrain(toprak, 0, 100);
+
+  float sicaklik = dht.readTemperature();
+  float nem = dht.readHumidity();
+
+  if (isnan(sicaklik) || isnan(nem)) {
+    Serial.println("DHT11 hatasi!");
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("DHT11 Hatasi!");
+    lcd.setCursor(0, 1);
+    lcd.print("Kablo kontrol et");
+    delay(2000);
+    return;
+  }
+
+  // Serial Monitor
+  Serial.println("----------------------------");
+  Serial.print("Toprak Nemi : %");
+  Serial.println(toprak);
+  Serial.print("Sicaklik    : ");
+  Serial.print(sicaklik);
+  Serial.println(" C");
+  Serial.print("Hava Nemi   : %");
+  Serial.println(nem);
+  Serial.println("----------------------------");
+
+  // LCD - Sayfa 1: Sicaklik ve Nem
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("S:");
+  lcd.print(sicaklik, 1);
+  lcd.print("C Hava Nem:");
+  lcd.print((int)nem);
+  lcd.print("%");
+  lcd.setCursor(0, 1);
+  lcd.print("Toprak Nem: %");
+  lcd.print(toprak);
+
+  // Firebase
+  Firebase.setInt(firebaseData,   "/botanix_sensor/toprak_nemi",     toprak);
+  Firebase.setFloat(firebaseData, "/botanix_sensor/ortam_sicakligi", sicaklik);
+  Firebase.setFloat(firebaseData, "/botanix_sensor/hava_nemi",       nem);
+
+  Serial.println("Firebase'e gonderildi!");
+  delay(5000);
+}

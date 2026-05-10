@@ -1,92 +1,103 @@
 #include <ESP8266WiFi.h>
-#include <FirebaseESP8266.h>
+#include <espnow.h>
 #include <DHT.h>
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 
-#define WIFI_SSID "Meriphone"
-#define WIFI_PASSWORD "meri12345"
-#define FIREBASE_HOST "botanix-iot-default-rtdb.europe-west1.firebasedatabase.app"
-#define FIREBASE_AUTH "fVatRmIuJPhmJHUi7Ke9dRJvxKfw7qxbrw1TViz7"
-
 #define DHT_PIN D4
 #define DHT_TYPE DHT11
+#define LED_PIN D0
 const int sensorPin = A0;
 
-LiquidCrystal_I2C lcd(0x27, 16, 2);  // 16 sutun, 2 satir
+uint8_t gatewayMAC[] = {0xA8, 0x42, 0xE3, 0xAB, 0x6E, 0x94};
+
+typedef struct struct_message {
+  float sicaklik;
+  float nem;
+  int toprak_nem;
+} struct_message;
+
+struct_message gonderData;
+
+LiquidCrystal_I2C lcd(0x27, 16, 2);
 DHT dht(DHT_PIN, DHT_TYPE);
-FirebaseData firebaseData;
-FirebaseConfig config;
-FirebaseAuth auth;
+
+bool gonderildi = false;
+bool hata = false;
+
+void gonderimSonucu(uint8_t *mac, uint8_t durum) {
+  if (durum == 0) {
+    Serial.println("ESP-NOW: Gonderildi!");
+    gonderildi = true;
+  } else {
+    Serial.println("ESP-NOW: Gonderilemedi!");
+    hata = true;
+  }
+}
 
 void setup() {
   Serial.begin(115200);
-  delay(2000);
+  delay(1000);
 
-  // LCD baslat
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, HIGH);
+
   Wire.begin(D2, D1);
   lcd.init();
   lcd.backlight();
   lcd.setCursor(0, 0);
   lcd.print("BotaniX Basliyor");
   lcd.setCursor(0, 1);
-  lcd.print("Lutfen bekleyin.");
+  lcd.print("ESP-NOW Modu");
+  delay(2000);
 
   dht.begin();
 
-  Serial.println("WiFi'a baglaniliyor...");
-  WiFi.disconnect();
   WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  WiFi.disconnect();
 
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("WiFi baglaniyor");
-
-  int deneme = 0;
-  while (WiFi.status() != WL_CONNECTED) {
-    Serial.print(".");
-    delay(500);
-    deneme++;
-    if (deneme > 40) {
-      Serial.println("Yeniden deneniyor...");
-      lcd.setCursor(0, 1);
-      lcd.print("Yeniden deneme..");
-      WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-      deneme = 0;
-    }
+  if (esp_now_init() != 0) {
+    Serial.println("ESP-NOW baslatılamadı!");
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("ESP-NOW Hatasi!");
+    return;
   }
 
-  Serial.println("WiFi baglandi!");
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("WiFi Baglandi!");
-  lcd.setCursor(0, 1);
-  lcd.print(WiFi.localIP());
-  delay(2000);
-
-  firebaseData.setBSSLBufferSize(4096, 1024);
-  config.host = FIREBASE_HOST;
-  config.signer.tokens.legacy_token = FIREBASE_AUTH;
-  Firebase.begin(&config, &auth);
-  Firebase.reconnectWiFi(true);
+  esp_now_set_self_role(ESP_NOW_ROLE_CONTROLLER);
+  esp_now_register_send_cb(gonderimSonucu);
+  esp_now_add_peer(gatewayMAC, ESP_NOW_ROLE_SLAVE, 1, NULL, 0);
 
   lcd.clear();
   lcd.setCursor(0, 0);
-  lcd.print("Firebase OK!");
+  lcd.print("ESP-NOW Hazir!");
   lcd.setCursor(0, 1);
-  lcd.print("Sistem Hazir!");
+  lcd.print("Gateway bulundu");
   delay(2000);
+
+  Serial.println("ESP-NOW hazir!");
 }
 
 void loop() {
-  if (!Firebase.ready()) {
-    Serial.println("Firebase hazir degil...");
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("Firebase Hatasi!");
-    delay(2000);
-    return;
+  // LED işlemleri callback yerine burada
+  if (gonderildi) {
+    for (int i = 0; i < 2; i++) {
+      digitalWrite(LED_PIN, LOW);
+      delay(100);
+      digitalWrite(LED_PIN, HIGH);
+      delay(100);
+    }
+    gonderildi = false;
+  }
+
+  if (hata) {
+    for (int i = 0; i < 5; i++) {
+      digitalWrite(LED_PIN, LOW);
+      delay(50);
+      digitalWrite(LED_PIN, HIGH);
+      delay(50);
+    }
+    hata = false;
   }
 
   int ham = analogRead(sensorPin);
@@ -107,34 +118,28 @@ void loop() {
     return;
   }
 
-  // Serial Monitor
-  Serial.println("----------------------------");
-  Serial.print("Toprak Nemi : %");
-  Serial.println(toprak);
-  Serial.print("Sicaklik    : ");
-  Serial.print(sicaklik);
-  Serial.println(" C");
-  Serial.print("Hava Nemi   : %");
-  Serial.println(nem);
-  Serial.println("----------------------------");
+  gonderData.sicaklik = sicaklik;
+  gonderData.nem = nem;
+  gonderData.toprak_nem = toprak;
 
-  // LCD - Sayfa 1: Sicaklik ve Nem
+  esp_now_send(gatewayMAC, (uint8_t*)&gonderData, sizeof(gonderData));
+
   lcd.clear();
   lcd.setCursor(0, 0);
   lcd.print("S:");
   lcd.print(sicaklik, 1);
-  lcd.print("C Hava Nem:");
+  lcd.print("C Nem:");
   lcd.print((int)nem);
   lcd.print("%");
   lcd.setCursor(0, 1);
   lcd.print("Toprak Nem: %");
   lcd.print(toprak);
 
-  // Firebase
-  Firebase.setInt(firebaseData,   "/botanix_sensor/toprak_nemi",     toprak);
-  Firebase.setFloat(firebaseData, "/botanix_sensor/ortam_sicakligi", sicaklik);
-  Firebase.setFloat(firebaseData, "/botanix_sensor/hava_nemi",       nem);
+  Serial.println("----------------------------");
+  Serial.print("Sicaklik  : "); Serial.print(sicaklik); Serial.println(" C");
+  Serial.print("Hava Nemi : %"); Serial.println(nem);
+  Serial.print("Toprak    : %"); Serial.println(toprak);
+  Serial.println("----------------------------");
 
-  Serial.println("Firebase'e gonderildi!");
   delay(5000);
 }
